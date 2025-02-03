@@ -258,76 +258,139 @@ class NewsController extends Controller
             'categoriesWithCount' => $uniqueCategoriesWithCount,
         ]);
     }
- 
-    // Method untuk menampilkan form edit
+    
     public function edit($id)
     {
         $news = News::findOrFail($id);
-    
-        // Decode kategori dan gambar lampiran jika diperlukan
-        $news->kategori = json_decode($news->kategori, true);
-        $news->gambar_lampiran = json_decode($news->gambar_lampiran, true);
-        $news->gambar_lampiran_keterangan = json_decode($news->gambar_lampiran_keterangan, true);
+        
+        // Decode kategori if needed
+        if (!is_array($news->kategori)) {
+            $decodedKategori = json_decode($news->kategori, true);
+            if (is_string($decodedKategori)) {
+                $decodedKategori = json_decode($decodedKategori, true);
+            }
+            $news->kategori = $decodedKategori;
+        }
+        
+        // Decode gambar lampiran and keterangan if they're stored as JSON strings
+        if (is_string($news->gambar_lampiran)) {
+            $news->gambar_lampiran = json_decode($news->gambar_lampiran, true) ?? [];
+        }
+        if (is_string($news->gambar_lampiran_keterangan)) {
+            $news->gambar_lampiran_keterangan = json_decode($news->gambar_lampiran_keterangan, true) ?? [];
+        }
     
         return Inertia::render('News/Edit', [
-            'news' => $news, // Pastikan data ini dikirim
+            'news' => $news
         ]);
     }
     
-    // Method untuk memproses pembaruan berita
-public function update(Request $request, $id)
-
-{
-
-    \Log::info('Request Data:', $request->all());
-    \Log::info('Files:', $request->file());
-    // Validasi input
-    $request->validate([
-        'penulis' => 'required|string|max:255',
-        'judul' => 'required|string|max:255',
-        'isi_berita' => 'required|string',
-        'gambar_utama' => 'nullable|image|mimes:jpg,jpeg,png,gif',
-        'gambar_lampiran.*' => 'nullable|image|mimes:jpg,jpeg,png,gif',
-        'kategori' => 'nullable|array',
-        'kategori.*' => 'string',
-        'gambar_utama_keterangan' => 'nullable|string',
-        'gambar_lampiran_keterangan' => 'nullable|array',
-        'gambar_lampiran_keterangan.*' => 'string',
-    ]);
-
-    // Temukan berita berdasarkan ID
-    $news = News::findOrFail($id);
-
-    // Update atribut berita
-    $news->penulis = $request->input('penulis');
-    $news->judul = $request->input('judul');
-    $news->isi_berita = $request->input('isi_berita');
-    $news->kategori = json_encode($request->input('kategori'));
-
-    // Handle gambar utama
-    if ($request->hasFile('gambar_utama')) {
-        // Hapus gambar lama jika ada
-        if ($news->gambar_utama) {
-            Storage::delete($news->gambar_utama);
+    public function update(Request $request, $id)
+    {
+        $config = HTMLPurifier_Config::createDefault();
+        $purifier = new HTMLPurifier($config);
+        
+        // Purify the news content
+        $cleanContent = $purifier->purify($request->input('isi_berita'));
+    
+        // Validate input
+        $request->validate([
+            'penulis' => 'required|string',
+            'judul' => 'required|string',
+            'isi_berita' => 'required',
+            'gambar_utama' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg|max:2048',
+            'gambar_lampiran.*' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg|max:10240',
+            'gambar_utama_keterangan' => 'nullable|string|max:255',
+            'gambar_lampiran_keterangan.*' => 'nullable|string|max:255',
+        ]);
+    
+        $news = News::findOrFail($id);
+    
+        // Update basic fields
+        $news->penulis = $request->penulis;
+        $news->judul = $request->judul;
+        $news->isi_berita = $request->isi_berita;
+        
+        // Handle kategori
+        $kategori = is_array($request->kategori) ? $request->kategori : json_decode($request->kategori, true);
+        $news->kategori = json_encode($kategori);
+    
+        // Handle main image update if new one is uploaded
+        if ($request->hasFile('gambar_utama') && $request->file('gambar_utama')->isValid()) {
+            // Delete old image if exists
+            if ($news->gambar_utama) {
+                Storage::delete($news->gambar_utama);
+            }
+            $news->gambar_utama = $request->file('gambar_utama')->store('images');
         }
-        // Simpan gambar baru
-        $gambarUtamaPath = $request->file('gambar_utama')->store('news_images');
-        $news->gambar_utama = $gambarUtamaPath;
+        
+        // Update main image caption
+        $news->gambar_utama_keterangan = $request->gambar_utama_keterangan;
+    
+        // Handle attachment images
+        $existingAttachments = is_string($news->gambar_lampiran) 
+            ? json_decode($news->gambar_lampiran, true) ?? []
+            : $news->gambar_lampiran ?? [];
+        
+        $existingCaptions = is_string($news->gambar_lampiran_keterangan)
+            ? json_decode($news->gambar_lampiran_keterangan, true) ?? []
+            : $news->gambar_lampiran_keterangan ?? [];
+    
+        // Handle deleted attachments
+        $keptAttachments = $request->input('kept_attachments', []);
+        foreach ($existingAttachments as $index => $path) {
+            if (!in_array($path, $keptAttachments)) {
+                Storage::delete($path);
+                unset($existingAttachments[$index]);
+                unset($existingCaptions[$index]);
+            }
+        }
+    
+        // Add new attachments
+        if ($request->hasFile('gambar_lampiran')) {
+            foreach ($request->file('gambar_lampiran') as $index => $lampiran) {
+                if ($lampiran->isValid()) {
+                    $path = $lampiran->store('images');
+                    $existingAttachments[] = $path;
+                    $existingCaptions[] = $request->input('gambar_lampiran_keterangan.' . $index);
+                }
+            }
+        }
+    
+        // Update the arrays in the database
+        $news->gambar_lampiran = json_encode(array_values($existingAttachments));
+        $news->gambar_lampiran_keterangan = json_encode(array_values($existingCaptions));
+    
+        $news->save();
+    
+        return redirect()->route('news.show', $news->id)->with('success', 'News updated successfully!');
     }
 
-    // Handle gambar lampiran
-    if ($request->hasFile('gambar_lampiran')) {
-        foreach ($request->file('gambar_lampiran') as $index => $file) {
-            // Simpan gambar lampiran dan keterangan
-            $gambarLampiranPath = $file->store('news_attachments');
-            $news->gambar_lampiran[] = $gambarLampiranPath;
-            $news->gambar_lampiran_keterangan[] = $request->input("gambar_lampiran_keterangan.$index");
+    public function destroy($id)
+    {
+        try {
+            // Find the news
+            $news = News::findOrFail($id);
+
+            // Delete the main image if exists
+            if ($news->gambar_utama) {
+                Storage::delete($news->gambar_utama);
+            }
+
+            // Delete attachment images if exist
+            if ($news->gambar_lampiran) {
+                $attachments = json_decode($news->gambar_lampiran, true);
+                foreach ($attachments as $attachment) {
+                    Storage::delete($attachment);
+                }
+            }
+
+            // Delete the news record
+            $news->delete();
+
+            return redirect()->route('news.index')->with('success', 'News deleted successfully!');
+        } catch (\Exception $e) {
+            return redirect()->back()->with('error', 'Error deleting news: ' . $e->getMessage());
         }
     }
-
-    // Simpan perubahan
-    $news->save();
-
-    return redirect()->route('news.index')->with('success', 'Berita berhasil diperbarui!');
-}
 }

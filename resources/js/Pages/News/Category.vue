@@ -6,12 +6,12 @@ import { Link, usePage } from '@inertiajs/vue3';
 const route = useRoute();
 const { props } = usePage();
 const newsItems = ref(props.newsItems);
-const allNews = ref(props.newsItems); // Simpan semua berita untuk reset filter
-const activeCategory = ref(route.params.category); // Ambil kategori dari route params
-const searchQuery = ref(''); // Query pencarian
+const allNews = ref(props.newsItems); 
+const activeCategory = ref(route.params.category); 
+const searchQuery = ref(''); 
 
 const searchNews = () => {
-  activeCategory.value = 'all'; // Reset kategori saat pencarian
+  activeCategory.value = 'all'; 
   newsItems.value = allNews.value.filter((news) => {
     const query = searchQuery.value.toLowerCase();
     return (

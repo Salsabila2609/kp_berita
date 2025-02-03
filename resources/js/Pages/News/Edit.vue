@@ -1,30 +1,15 @@
 <script setup>
 import { useForm } from '@inertiajs/vue3';
 import { Link } from '@inertiajs/vue3';
-import MyEditor from '@/Components/MyEditor.vue'; // Pastikan MyEditor di-import
-import { onMounted } from 'vue';
+import MyEditor from '@/Components/MyEditor.vue';
 
-// Props untuk menerima data berita yang akan diedit
 const props = defineProps({
   news: {
     type: Object,
-    required: true,
-  },
+    required: true
+  }
 });
 
-// Form setup dengan data yang sudah ada
-const form = useForm({
-  penulis: props.news.penulis,
-  judul: props.news.judul,
-  isi_berita: props.news.isi_berita,
-  gambar_utama: null,
-  gambar_utama_keterangan: props.news.gambar_utama_keterangan,
-  gambar_lampiran: [],  // Array untuk gambar lampiran
-  gambar_lampiran_keterangan: props.news.gambar_lampiran_keterangan || [], // Keterangan gambar lampiran
-  kategori: props.news.kategori || [],
-});
-
-// Categories for checkbox options
 const categories = [
   'Pemerintah',
   'Berita Daerah', 
@@ -34,73 +19,93 @@ const categories = [
   'Lowongan',
 ];
 
-// Submit function untuk update
-const submit = () => {
-  // Convert the categories array to a JSON string before submission
-  form.kategori = JSON.stringify(form.kategori);
+const form = useForm({
+  _method: 'PUT',  // Add this for proper method spoofing
+  penulis: props.news.penulis,
+  judul: props.news.judul,
+  isi_berita: props.news.isi_berita,
+  kategori: props.news.kategori || [],
+  gambar_utama: null,
+  gambar_utama_keterangan: props.news.gambar_utama_keterangan || '',
+  gambar_lampiran: [],
+  gambar_lampiran_keterangan: [],
+  kept_attachments: props.news.gambar_lampiran || [],
+  kept_attachments_keterangan: props.news.gambar_lampiran_keterangan || [],
+});
 
+const submit = () => {
+  // Convert categories to JSON string
+  const formKategori = JSON.stringify(form.kategori);
+  
+  // Create a new FormData instance
   const formData = new FormData();
+  
+  // Append all form fields
+  formData.append('_method', 'PUT');
   formData.append('penulis', form.penulis);
   formData.append('judul', form.judul);
   formData.append('isi_berita', form.isi_berita);
-  formData.append('kategori', JSON.stringify(form.kategori));
+  formData.append('kategori', formKategori);
   formData.append('gambar_utama_keterangan', form.gambar_utama_keterangan);
 
-  if (form.gambar_utama) {
+  // Handle main image
+  if (form.gambar_utama instanceof File) {
     formData.append('gambar_utama', form.gambar_utama);
   }
 
+  // Handle kept attachments
+  form.kept_attachments.forEach((path, index) => {
+    formData.append(`kept_attachments[]`, path);
+    formData.append(`kept_attachments_keterangan[]`, form.kept_attachments_keterangan[index] || '');
+  });
+
+  // Handle new attachments
   form.gambar_lampiran.forEach((file, index) => {
-    formData.append(`gambar_lampiran[${index}]`, file);
-    formData.append(`gambar_lampiran_keterangan[${index}]`, form.gambar_lampiran_keterangan[index]);
+    if (file instanceof File) {
+      formData.append(`gambar_lampiran[]`, file);
+      formData.append(`gambar_lampiran_keterangan[]`, form.gambar_lampiran_keterangan[index] || '');
+    }
   });
 
-  // Log FormData sebelum dikirim
-  for (let [key, value] of formData.entries()) {
-    console.log(key, value);
-  }
-
-  // Kirim request
-  form.put(`/news/${props.news.id}`, {
-    data: formData,
-    headers: {
-      'Content-Type': 'multipart/form-data',
+  // Submit using Inertia's form helper with the FormData
+  form.post(`/news/${props.news.id}`, {
+    forceFormData: true,
+    onSuccess: () => {
+      // Optional: Add success handling
     },
+    preserveScroll: true,
   });
 };
 
-// Method to add image to the form
 const addImage = (event) => {
-  if (event.target.files.length > 0) {
-    form.gambar_lampiran.push(event.target.files[0]);
-    form.gambar_lampiran_keterangan.push(''); // Menambahkan entri kosong untuk keterangan gambar
+  const files = event.target.files;
+  if (files.length > 0) {
+    form.gambar_lampiran.push(files[0]);
+    form.gambar_lampiran_keterangan.push('');
   }
 };
 
-// Method to remove an attachment image
-const removeImage = (index) => {
+const removeExistingImage = (index) => {
+  form.kept_attachments.splice(index, 1);
+  form.kept_attachments_keterangan.splice(index, 1);
+};
+
+const removeNewImage = (index) => {
   form.gambar_lampiran.splice(index, 1);
+  form.gambar_lampiran_keterangan.splice(index, 1);
 };
 
-// Method to preview the uploaded image
 const previewImage = (file) => {
-  return URL.createObjectURL(file);
+  return file instanceof File ? URL.createObjectURL(file) : `/storage/${file}`;
 };
-
-// Load existing images on mount
-onMounted(() => {
-  if (props.news.gambar_lampiran) {
-    form.gambar_lampiran = props.news.gambar_lampiran;
-  }
-});
 </script>
 
 <template>
   <div class="min-h-screen bg-gray-100">
     <nav class="bg-blue-600 text-white shadow">
       <div class="container mx-auto px-4 py-2 flex justify-between items-center">
-        <Link href="/dashboard" class="text-xl font-bold hover:underline">
-          Back to Dashboard
+        <Link href="/news" class="text-xl font-bold hover:underline">
+          Back to News
         </Link>
       </div>
     </nav>
@@ -108,7 +113,6 @@ onMounted(() => {
     <main class="container mx-auto mt-10 p-6 bg-white shadow rounded">
       <h1 class="text-2xl font-bold text-center mb-6">Edit News</h1>
 
-      <!-- Form to edit news -->
       <form @submit.prevent="submit" enctype="multipart/form-data">
         <!-- Penulis -->
         <div class="mb-4">
@@ -122,7 +126,7 @@ onMounted(() => {
           />
         </div>
 
-        <!-- Judul Berita -->
+        <!-- Judul -->
         <div class="mb-4">
           <label for="judul" class="block text-sm font-semibold text-gray-700">Judul Berita</label>
           <input
@@ -159,6 +163,16 @@ onMounted(() => {
         <!-- Gambar Utama -->
         <div class="mb-4">
           <label for="gambar_utama" class="block text-sm font-semibold text-gray-700">Gambar Utama</label>
+          <!-- Current main image preview -->
+          <div v-if="news.gambar_utama" class="mt-2 mb-2">
+            <p class="text-sm text-gray-600">Current image:</p>
+            <img
+              :src="`/storage/${news.gambar_utama}`"
+              alt="Current Main Image"
+              class="w-32 h-32 object-cover rounded-md"
+            />
+          </div>
+          <!-- New main image upload -->
           <input
             id="gambar_utama"
             type="file"
@@ -166,65 +180,74 @@ onMounted(() => {
             @change="event => form.gambar_utama = event.target.files[0]"
             class="mt-1 block w-full text-sm text-gray-500 border border-gray-300 rounded-md"
           />
-          <!-- Preview for Gambar Utama -->
+          <!-- New image preview -->
           <div v-if="form.gambar_utama" class="mt-2">
+            <p class="text-sm text-gray-600">New image:</p>
             <img
               :src="previewImage(form.gambar_utama)"
-              alt="Preview Image"
+              alt="New Main Image Preview"
               class="w-32 h-32 object-cover rounded-md"
             />
           </div>
-          <div v-else-if="props.news.gambar_utama" class="mt-2">
-            <img
-              :src="`/storage/${props.news.gambar_utama}`"
-              alt="Existing Image"
-              class="w-32 h-32 object-cover rounded-md"
-            />
-          </div>
-
-          <!-- Input Keterangan untuk Gambar Utama -->
-          <label for="gambar_utama_keterangan" class="block text-sm font-semibold text-gray-700 mt-2">Keterangan Gambar Utama</label>
+          <!-- Main image caption -->
+          <label for="gambar_utama_keterangan" class="block text-sm font-semibold text-gray-700 mt-2">
+            Keterangan Gambar Utama
+          </label>
           <input
             id="gambar_utama_keterangan"
             type="text"
             v-model="form.gambar_utama_keterangan"
-            placeholder="Masukkan keterangan gambar utama"
             class="mt-1 block w-full text-sm text-gray-500 border border-gray-300 rounded-md"
           />
         </div>
 
-        <!-- Gambar Lampiran -->
-        <div class="mb-4">
-          <label for="gambar_lampiran" class="block text-sm font-semibold text-gray-700">Gambar Lampiran</label>
-          <div v-for="(gambar, index) in form.gambar_lampiran" :key="index" class="flex items-center mb-2">
-            <span class="mr-2">{{ gambar.name || gambar }}</span>
+        <!-- Existing Attachments -->
+        <div v-if="form.kept_attachments.length" class="mb-4">
+          <label class="block text-sm font-semibold text-gray-700">Existing Attachments</label>
+          <div v-for="(path, index) in form.kept_attachments" :key="index" class="flex items-center mb-2">
+            <img
+              :src="`/storage/${path}`"
+              alt="Attachment Preview"
+              class="w-16 h-16 object-cover rounded-md"
+            />
+            <input
+              v-model="form.kept_attachments_keterangan[index]"
+              type="text"
+              placeholder="Keterangan gambar"
+              class="ml-2 flex-grow p-2 border border-gray-300 rounded-md"
+            />
             <button
               type="button"
-              @click="removeImage(index)"
-              class="text-red-600 hover:text-red-800"
+              @click="removeExistingImage(index)"
+              class="ml-2 text-red-600 hover:text-red-800"
             >
               Remove
             </button>
-            <!-- Preview for Lampiran -->
+          </div>
+        </div>
+
+        <!-- New Attachments -->
+        <div class="mb-4">
+          <label for="gambar_lampiran" class="block text-sm font-semibold text-gray-700">Add New Attachments</label>
+          <div v-for="(gambar, index) in form.gambar_lampiran" :key="index" class="flex items-center mb-2">
             <img
-              v-if="gambar && typeof gambar === 'object'"
               :src="previewImage(gambar)"
-              alt="Attachment Preview"
-              class="w-16 h-16 object-cover rounded-md ml-2"
+              alt="New Attachment Preview"
+              class="w-16 h-16 object-cover rounded-md"
             />
-            <img
-              v-else-if="gambar"
-              :src="`/storage/${gambar}`"
-              alt="Existing Attachment"
-              class="w-16 h-16 object-cover rounded-md ml-2"
-            />
-            <!-- Input Keterangan untuk Gambar Lampiran -->
             <input
               v-model="form.gambar_lampiran_keterangan[index]"
               type="text"
-              placeholder="Keterangan gambar lampiran"
-              class="mt-1 block w-full text-sm text-gray-500 border border-gray-300 rounded-md"
+              placeholder="Keterangan gambar"
+              class="ml-2 flex-grow p-2 border border-gray-300 rounded-md"
             />
+            <button
+              type="button"
+              @click="removeNewImage(index)"
+              class="ml-2 text-red-600 hover:text-red-800"
+            >
+              Remove
+            </button>
           </div>
           <input
             id="gambar_lampiran"
@@ -233,15 +256,17 @@ onMounted(() => {
             @change="addImage"
             class="mt-1 block w-full text-sm text-gray-500 border border-gray-300 rounded-md"
           />
+          <p class="text-sm text-gray-500 mt-1">You can add up to 5 attachment images</p>
         </div>
 
         <!-- Submit Button -->
-        <div class="text-center">
+        <div class="text-center mt-6">
           <button
             type="submit"
             class="bg-blue-600 text-white px-6 py-2 rounded-md shadow hover:bg-blue-700 focus:outline-none"
+            :disabled="form.processing"
           >
-            Update News
+            {{ form.processing ? 'Updating...' : 'Update News' }}
           </button>
         </div>
       </form>
